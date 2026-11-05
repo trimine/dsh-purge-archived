@@ -62,6 +62,25 @@ window.__ModuleLoader__.load({
         errGeneric: 'The deletion failed: {detail}',
         errMore: '{detail} (+{count} more)',
         errScan: 'Reading archived conversations failed: {detail}',
+        copy: 'Copy',
+        copied: 'Copied',
+        details: 'Details',
+        dSessionId: 'Session ID',
+        dArchive: 'Archive',
+        dWorkspaces: 'Workspaces',
+        dState: 'State',
+        dLogDir: 'Log folder',
+        dLogFiles: 'Log files',
+        dCache: 'Projection cache',
+        dCwd: 'Working directory',
+        dCreated: 'Created',
+        dFormat: 'Log format',
+        dSize: 'On disk',
+        none: 'None',
+        live: 'Live',
+        inactive: 'Not running',
+        archivedYes: 'Archived',
+        archivedNo: 'Workspace residue only',
       },
       zh: {
         menuItem: '永久删除…',
@@ -104,6 +123,25 @@ window.__ModuleLoader__.load({
         errGeneric: '操作失败：{detail}',
         errMore: '{detail}（另有 {count} 个失败）',
         errScan: '读取已归档对话失败：{detail}',
+        copy: '复制',
+        copied: '已复制',
+        details: '详情',
+        dSessionId: '会话 ID',
+        dArchive: '归档',
+        dWorkspaces: '工作区',
+        dState: '状态',
+        dLogDir: '日志目录',
+        dLogFiles: '日志文件',
+        dCache: '投影缓存',
+        dCwd: '工作目录',
+        dCreated: '创建时间',
+        dFormat: '日志格式',
+        dSize: '占用',
+        none: '无',
+        live: '运行中',
+        inactive: '未运行',
+        archivedYes: '已归档',
+        archivedNo: '仅工作区残留',
       },
     }
 
@@ -152,7 +190,7 @@ window.__ModuleLoader__.load({
   background: var(--dsw-alias-bg-layer-1); overflow: hidden;
 }
 .dsh-pa-row {
-  display: grid; grid-template-columns: 24px minmax(0, 1fr) auto auto;
+  display: grid; grid-template-columns: 24px minmax(0, 1fr) auto auto 24px;
   align-items: center; gap: 12px;
   padding: 10px 14px; border-top: 1px solid var(--dsw-alias-border-l1);
   font-size: 13px;
@@ -179,6 +217,36 @@ window.__ModuleLoader__.load({
 .dsh-pa-badge-info { border-color: var(--dsw-alias-border-l2); color: var(--dsw-alias-label-secondary); }
 .dsh-pa-empty { padding: 40px 16px; text-align: center; color: var(--dsw-alias-label-secondary); font-size: 13px; }
 .dsh-pa-check { width: 15px; height: 15px; accent-color: var(--dsw-alias-brand-primary); cursor: pointer; }
+.dsh-pa-item { border-top: 1px solid var(--dsw-alias-border-l1); }
+.dsh-pa-item:first-child { border-top: 0; }
+.dsh-pa-item .dsh-pa-row { border-top: 0; }
+.dsh-pa-chevron {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px;
+  background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer;
+}
+.dsh-pa-chevron:hover { background: var(--dsw-alias-bg-layer-2); }
+.dsh-pa-chevron:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: -2px; }
+.dsh-pa-details { padding: 2px 14px 14px 50px; }
+.dsh-pa-detail {
+  display: grid; grid-template-columns: 96px minmax(0, 1fr);
+  gap: 8px 12px; margin: 0; padding: 10px 0 0;
+  border-top: 1px dashed var(--dsw-alias-border-l1); font-size: 12px;
+}
+.dsh-pa-detail dt { color: var(--dsw-alias-label-secondary); }
+.dsh-pa-detail dd { margin: 0; min-width: 0; color: var(--dsw-alias-label-primary); }
+.dsh-pa-code {
+  display: block; overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px; color: var(--dsw-alias-label-secondary);
+}
+.dsh-pa-file { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; }
+.dsh-pa-copy {
+  flex: 0 0 auto; height: 18px; padding: 0 6px; border-radius: 6px;
+  border: 1px solid var(--dsw-alias-border-l2); background: transparent;
+  color: var(--dsw-alias-label-secondary); font: inherit; font-size: 11px; cursor: pointer;
+}
+.dsh-pa-copy:hover { background: var(--dsw-alias-bg-layer-2); }
 `
 
     const prefersChinese = (() => {
@@ -309,6 +377,34 @@ window.__ModuleLoader__.load({
 
     function requestScan() {
       return postJson(ROUTE_SCAN, {})
+    }
+
+    /** Clipboard write with a silent failure: the paths stay selectable anyway. */
+    async function copyText(value) {
+      try {
+        await navigator.clipboard.writeText(value)
+        return true
+      } catch {
+        return false
+      }
+    }
+
+    function CopyButton(props) {
+      const [done, setDone] = React.useState(false)
+      return h(
+        'button',
+        {
+          type: 'button',
+          className: 'dsh-pa-copy',
+          onClick: async () => {
+            const copied = await copyText(String(props.value))
+            if (!copied) return
+            setDone(true)
+            setTimeout(() => setDone(false), 1200)
+          },
+        },
+        done ? copy('copied') : copy('copy'),
+      )
     }
 
     /** Session menu row: visible only on a Session the archive set contains. */
@@ -540,6 +636,7 @@ window.__ModuleLoader__.load({
       const [loading, setLoading] = React.useState(true)
       const [error, setError] = React.useState(null)
       const [selected, setSelected] = React.useState(() => new Set())
+      const [expanded, setExpanded] = React.useState(() => new Set())
       const [reloadToken, setReloadToken] = React.useState(0)
 
       React.useEffect(() => {
@@ -686,6 +783,87 @@ window.__ModuleLoader__.load({
         ),
       )
 
+      const toggleExpanded = (sessionId) => {
+        setExpanded((previous) => {
+          const next = new Set(previous)
+          if (next.has(sessionId)) next.delete(sessionId)
+          else next.add(sessionId)
+          return next
+        })
+      }
+
+      const pathValue = (value, key) =>
+        h(
+          'span',
+          { className: 'dsh-pa-file', key },
+          h('code', { className: 'dsh-pa-code', style: { flex: '1 1 auto' } }, value),
+          h(CopyButton, { value }),
+        )
+
+      const detailsOf = (entry) => {
+        const items = []
+        items.push({ label: copy('dSessionId'), value: pathValue(entry.sessionId, 'id') })
+        items.push({
+          label: copy('dArchive'),
+          value: entry.archived === true ? copy('archivedYes') : copy('archivedNo'),
+        })
+        items.push({
+          label: copy('dWorkspaces'),
+          value:
+            Array.isArray(entry.workspaceTitles) && entry.workspaceTitles.length > 0
+              ? entry.workspaceTitles.join(' / ')
+              : copy('none'),
+        })
+        items.push({ label: copy('dState'), value: entry.live === true ? copy('live') : copy('inactive') })
+        items.push({
+          label: copy('dLogDir'),
+          value:
+            Array.isArray(entry.directories) && entry.directories.length > 0
+              ? entry.directories.map((directory, index) => pathValue(directory, `dir${index}`))
+              : copy('none'),
+        })
+        items.push({
+          label: copy('dLogFiles'),
+          value:
+            Array.isArray(entry.files) && entry.files.length > 0
+              ? entry.files.map((file, index) =>
+                  pathValue(`${file.path} · ${formatBytes(file.bytes)}`, `file${index}`),
+                )
+              : copy('none'),
+        })
+        items.push({
+          label: copy('dCache'),
+          value:
+            typeof entry.cachePath === 'string'
+              ? pathValue(entry.cachePath, 'cache')
+              : copy('none'),
+        })
+        const header = entry.header
+        if (header !== undefined && header !== null) {
+          if (typeof header.cwd === 'string' && header.cwd.length > 0) {
+            items.push({ label: copy('dCwd'), value: h('code', { className: 'dsh-pa-code' }, header.cwd) })
+          }
+          items.push({ label: copy('dCreated'), value: formatTime(header.createdAt) })
+          items.push({
+            label: copy('dFormat'),
+            value: `v${header.formatVersion}${header.formatStatus ? ` · ${header.formatStatus}` : ''}`,
+          })
+        }
+        items.push({ label: copy('dSize'), value: formatBytes(entry.sizeBytes) })
+        return h(
+          'div',
+          { className: 'dsh-pa-details' },
+          h(
+            'dl',
+            { className: 'dsh-pa-detail' },
+            items.map((item, index) => [
+              h('dt', { key: `dt${index}` }, item.label),
+              h('dd', { key: `dd${index}` }, item.value),
+            ]),
+          ),
+        )
+      }
+
       let body
       if (loading && data === null) {
         body = h('div', { className: 'dsh-pa-empty' }, copy('loading'))
@@ -695,47 +873,80 @@ window.__ModuleLoader__.load({
         body = h(
           'ul',
           { className: 'dsh-pa-list' },
-          entries.map((entry) =>
-            h(
+          entries.map((entry) => {
+            const open = expanded.has(entry.sessionId)
+            return h(
               'li',
-              { className: 'dsh-pa-row', key: entry.sessionId },
-              h('input', {
-                type: 'checkbox',
-                className: 'dsh-pa-check',
-                checked: selected.has(entry.sessionId),
-                onChange: () => toggle(entry.sessionId),
-                'aria-label': entry.title || entry.sessionId,
-              }),
+              { className: 'dsh-pa-item', key: entry.sessionId },
               h(
                 'div',
-                { className: 'dsh-pa-row-main' },
+                { className: 'dsh-pa-row' },
+                h('input', {
+                  type: 'checkbox',
+                  className: 'dsh-pa-check',
+                  checked: selected.has(entry.sessionId),
+                  onChange: () => toggle(entry.sessionId),
+                  'aria-label': entry.title || entry.sessionId,
+                }),
+                h(
+                  'div',
+                  { className: 'dsh-pa-row-main' },
+                  h(
+                    'span',
+                    { className: 'dsh-pa-row-title', title: entry.title || entry.sessionId },
+                    entry.title || copy('untitled'),
+                  ),
+                  h('span', { className: 'dsh-pa-row-id' }, entry.sessionId),
+                ),
                 h(
                   'span',
-                  { className: 'dsh-pa-row-title', title: entry.title || entry.sessionId },
-                  entry.title || copy('untitled'),
+                  { className: 'dsh-pa-row-meta' },
+                  entry.logFound === true
+                    ? formatBytes(entry.sizeBytes)
+                    : h(
+                        'span',
+                        { className: 'dsh-pa-badge', title: copy('badgeDanglingHint') },
+                        copy('badgeDangling'),
+                      ),
                 ),
-                h('span', { className: 'dsh-pa-row-id' }, entry.sessionId),
+                h(
+                  'span',
+                  { className: 'dsh-pa-row-meta' },
+                  entry.logFound === true
+                    ? formatTime(entry.updatedAt)
+                    : h('span', { className: 'dsh-pa-badge dsh-pa-badge-info' }, copy('badgeUnarchived')),
+                ),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dsh-pa-chevron',
+                    'aria-expanded': open,
+                    'aria-label': copy('details'),
+                    title: copy('details'),
+                    onClick: () => toggleExpanded(entry.sessionId),
+                  },
+                  h(
+                    'svg',
+                    {
+                      width: 14,
+                      height: 14,
+                      viewBox: '0 0 24 24',
+                      fill: 'none',
+                      stroke: 'currentColor',
+                      strokeWidth: 2,
+                      strokeLinecap: 'round',
+                      strokeLinejoin: 'round',
+                      'aria-hidden': true,
+                      style: { transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 120ms' },
+                    },
+                    h('path', { d: 'M9 6l6 6-6 6' }),
+                  ),
+                ),
               ),
-              h(
-                'span',
-                { className: 'dsh-pa-row-meta' },
-                entry.logFound === true
-                  ? formatBytes(entry.sizeBytes)
-                  : h(
-                      'span',
-                      { className: 'dsh-pa-badge', title: copy('badgeDanglingHint') },
-                      copy('badgeDangling'),
-                    ),
-              ),
-              h(
-                'span',
-                { className: 'dsh-pa-row-meta' },
-                entry.logFound === true
-                  ? formatTime(entry.updatedAt)
-                  : h('span', { className: 'dsh-pa-badge dsh-pa-badge-info' }, copy('badgeUnarchived')),
-              ),
-            ),
-          ),
+              open ? detailsOf(entry) : null,
+            )
+          }),
         )
       }
 

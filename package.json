@@ -1,6 +1,6 @@
 {
   "name": "dsh-purge-archived",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Permanently delete archived DeepSeek Harness conversations: removes the stored session log, its projection cache, the archive mark, and the workspace membership, with a bulk cleanup page for dangling entries.",
   "icon": "icon.svg",
   "author": "trimine",

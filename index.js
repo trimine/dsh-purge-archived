@@ -37,6 +37,7 @@ export const inject = [
   'workspaceRegistry',
   'workspaceController',
   'sessionQuery',
+  'sessionPersistence',
   'sessions',
 ]
 
@@ -137,9 +138,10 @@ export function apply(ctx) {
     }
   }
 
-  /** On-disk footprint of one Session: log directories plus its cache checkpoint. */
+  /** On-disk footprint of one Session: log directories, their files, and its cache checkpoint. */
   async function measureArtifacts(sessionId) {
     const directories = await findSessionDirectories(sessionsRoot, sessionId)
+    const files = []
     let sizeBytes = 0
     let updatedAt = 0
     for (const directory of directories) {
@@ -151,8 +153,10 @@ export function apply(ctx) {
       }
       for (const entry of entries) {
         if (!entry.isFile()) continue
+        const filePath = path.join(directory, entry.name)
         try {
-          const info = await fs.stat(path.join(directory, entry.name))
+          const info = await fs.stat(filePath)
+          files.push({ path: filePath, bytes: info.size })
           sizeBytes += info.size
           updatedAt = Math.max(updatedAt, info.mtimeMs)
         } catch {
@@ -160,16 +164,17 @@ export function apply(ctx) {
         }
       }
     }
+    const cachePath = path.join(projectionCacheRoot, `${sessionId}.json`)
     let cacheFound = false
     try {
-      const info = await fs.stat(path.join(projectionCacheRoot, `${sessionId}.json`))
+      const info = await fs.stat(cachePath)
       cacheFound = true
       sizeBytes += info.size
       updatedAt = Math.max(updatedAt, info.mtimeMs)
     } catch {
       // No checkpoint for this Session.
     }
-    return { directories, sizeBytes, updatedAt, cacheFound }
+    return { directories, files, cachePath, sizeBytes, updatedAt, cacheFound }
   }
 
   /** Best-effort titles from the log-backed title fold; never fatal. */
@@ -189,6 +194,22 @@ export function apply(ctx) {
     return titles
   }
 
+  /** Header facts for one stored Session; undefined when its log is unreadable. */
+  async function readHeader(sessionId) {
+    try {
+      const snapshot = await ctx.sessionPersistence.stat(sessionId)
+      if (snapshot === undefined) return undefined
+      return {
+        ...(snapshot.header.cwd === undefined ? {} : { cwd: snapshot.header.cwd }),
+        createdAt: snapshot.header.createdAt,
+        formatVersion: snapshot.header.version,
+        ...(snapshot.formatStatus === undefined ? {} : { formatStatus: snapshot.formatStatus }),
+      }
+    } catch {
+      return undefined
+    }
+  }
+
   /**
    * Every id worth showing on the cleanup page: the archive set, plus any
    * Workspace membership whose stored log is already gone. An ordinary,
@@ -197,11 +218,12 @@ export function apply(ctx) {
   async function scanEntries() {
     const archiveSet = await readArchiveSet()
     const archived = archiveSet ?? new Set()
+    const registryWorkspaces = ctx.workspaceRegistry.list()
     const candidates = new Map()
     for (const sessionId of archived) {
       candidates.set(sessionId, { archived: true, workspaceIds: [] })
     }
-    for (const workspace of ctx.workspaceRegistry.list()) {
+    for (const workspace of registryWorkspaces) {
       for (const sessionId of workspace.sessionIds) {
         const record = candidates.get(sessionId) ?? { archived: false, workspaceIds: [] }
         record.workspaceIds.push(workspace.id)
@@ -215,6 +237,9 @@ export function apply(ctx) {
       const measured = await measureArtifacts(sessionId)
       const logFound = measured.directories.length > 0
       if (!record.archived && logFound) continue // an ordinary conversation
+      const workspaceTitles = registryWorkspaces
+        .filter((workspace) => workspace.sessionIds.includes(sessionId))
+        .map((workspace) => workspace.title)
       entries.push({
         sessionId,
         archived: record.archived,
@@ -222,8 +247,13 @@ export function apply(ctx) {
         cacheFound: measured.cacheFound,
         live: ctx.sessions.get(sessionId) !== undefined,
         inWorkspaces: record.workspaceIds.length,
+        workspaceTitles,
         sizeBytes: measured.sizeBytes,
         updatedAt: measured.updatedAt,
+        directories: measured.directories,
+        files: measured.files,
+        ...(measured.cacheFound ? { cachePath: measured.cachePath } : {}),
+        ...(logFound ? { header: await readHeader(sessionId) } : {}),
       })
     }
 
