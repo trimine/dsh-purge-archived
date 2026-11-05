@@ -1,0 +1,6 @@
+# The purge bundle: one Host row serving the deletion and scan routes, plus the
+# Client module declared in package.json (`dsh.client`) that adds the Session
+# menu action, the sidebar cleanup panel, and the confirmation dialog.
+- insert:
+    - id: purge-archived
+      name: 'dsh-purge-archived'

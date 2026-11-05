@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Archived Conversation Purge",
+    "description": "Permanently delete archived conversations: removes the stored session log, its projection cache, the archive entry, and the workspace membership."
+  }
+}

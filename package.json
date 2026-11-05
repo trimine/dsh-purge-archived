@@ -1,0 +1,64 @@
+{
+  "name": "dsh-purge-archived",
+  "version": "1.0.0",
+  "description": "Permanently delete archived DeepSeek Harness conversations: removes the stored session log, its projection cache, the archive mark, and the workspace membership, with a bulk cleanup page for dangling entries.",
+  "icon": "icon.svg",
+  "author": "trimine",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/trimine/dsh-purge-archived.git"
+  },
+  "homepage": "https://github.com/trimine/dsh-purge-archived",
+  "bugs": {
+    "url": "https://github.com/trimine/dsh-purge-archived/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0",
+    "dsh": ">=0.2.0-rc.2 || >=0.2.1-rc.2"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "cordis",
+    "plugin",
+    "archive",
+    "session",
+    "delete",
+    "cleanup"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-workspace"
+      ]
+    },
+    "compatibility": {
+      "dshReleases": {
+        "0.2.1-rc.5": "compatible"
+      }
+    }
+  }
+}
