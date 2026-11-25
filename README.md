@@ -1,165 +1,119 @@
 # dsh-purge-archived
 
-[English](#english) | [中文](#中文)
-
-## English
-
-**Permanently delete archived conversations in DeepSeek Harness — the stored log, the projection cache, the archive mark, and the workspace membership.**
-
-DeepSeek Harness deliberately ships no Session deletion: `@deepseek-ai/dsh-session-persistence-jsonl` documents that "logs accumulate under `root` until removed externally; the seam has no deletion API", and `@deepseek-ai/dsh-client-ui-workspace` lists "No Session deletion" as a known limitation. Archiving only sets a mark; the log stays on disk forever. This plugin adds exactly that one missing operation.
-
-### Features
-
-- **Delete permanently…** — a red row at the end of an archived Session's `...` menu, with a confirmation dialog.
-- **Clean up archived chats** — a first-class sidebar panel (beside Plugins and Automation tasks) listing every archived conversation with its size, last activity, and title.
-- **Bulk delete** — select any rows, or delete everything in one go.
-- **Dangling-entry cleanup** — conversations whose log files were already deleted by hand still leave an archive mark and workspace membership behind. They are listed as **No log** and can be cleaned in one click.
-- Bilingual UI (English / 简体中文), theme-token styling, keyboard-accessible dialog.
-
-### What one purge removes
-
-| Artifact | Path |
-| --- | --- |
-| Stored log generation(s) | `<DSH_HOME>/sessions/<project>/<sessionId>/` |
-| Projection-cache checkpoint | `<DSH_HOME>/storages/session_projcache/sessions/<sessionId>.json` |
-| Archive mark | the registry's durable archive set |
-| Workspace membership | every Workspace's `sessionIds` |
-
-Connected Clients drop the row immediately through the ordinary `api-session/removed` notification.
-
-**Safety.** Only two kinds of entry are accepted: an id in the durable archive set, or an id with no stored log and no live Session (pure registry residue). An ordinary, still-stored, unarchived conversation is always refused. The HTTP routes accept only a same-origin, JSON-bodied `POST`.
-
-### Install
-
-From the Plugins page: sidebar **Plugins** → **Add plugin** → type `dsh-purge-archived` → **Install**.
-
-With the `dsh` CLI:
-
-```sh
-dsh plugin --profile desktop add dsh-purge-archived
-```
-
-From a local checkout, point the plugin manager at the directory:
-
-```sh
-dsh plugin --profile desktop add /absolute/path/to/dsh-purge-archived
-```
-
-A local directory install links the checkout, so the folder must stay in place.
-
-After installing a *new version* of an already-installed plugin, restart DeepSeek Harness once so the Host half loads the fresh module, then refresh the page.
-
-### Use
-
-1. **Single conversation** — set the sidebar's view options to **All conversations** or **Archived only** so archived rows are visible, then open a row's `...` menu and pick **Delete permanently…**.
-2. **Bulk** — click **Clean up archived chats** in the sidebar's panel list, select rows (or **Select all**), then **Delete selected**.
-3. **Dangling entries** — the same page lists entries marked **No log**; **Clean up all N invalid entries** removes just those.
-
-### Compatibility
-
-Verified against DeepSeek Harness `0.2.1-rc.5` (V4 session-log generation, Windows desktop). The deletion path is format-agnostic: it removes the whole Session directory instead of naming a log file, so later log generations keep working.
-
-Requires the `@deepseek-ai/dsh-client-ui-workspace` client package (part of the standard Web/Desktop composition) and the Workspace registry on the Host.
-
-### Develop
-
-Plain JavaScript, no build step. `index.js` is the Host half (Cordis plugin), `client.js` is the browser module (`window.__ModuleLoader__`), `cordis.patch.yml` inserts the row, `locale/*.json` carries the Plugin Manager metadata.
-
-`index.js` exports `removeSessionArtifacts()` — the filesystem layer — so it can be exercised against a temporary DSH home without a running Host.
-
-### Publish checklist
-
-The manifest still carries `OWNER` placeholders in `author`, `repository`, `homepage`, `bugs`, and in `LICENSE`. Replace them, then:
-
-```sh
-# 1. rename if you want your own scope (also update client.js `id:` and cordis.patch.yml `name:`)
-npm pkg set name=@you/dsh-purge-archived
-
-# 2. publish
-npm publish --access public
-```
-
-A published package installs by name in the Add-plugin wizard. For a marketplace listing, submit the repository to the community plugin index your deployment points at (the `plugin-market` row's `indexes` config).
+[中文](#中文) | [English](#english)
 
 ## 中文
 
-**彻底删除 DeepSeek Harness 中已归档的对话 —— 会话日志、投影缓存、归档标记与工作区成员记录一并清除。**
+**清理已归档对话**是 DeepSeek Harness 的本地会话清理插件：在插件里选好已归档对话，点一次删除，由插件完成本地日志、缓存与登记记录的清理，不需要手动翻磁盘。
 
-DeepSeek Harness 有意不提供会话删除能力：`@deepseek-ai/dsh-session-persistence-jsonl` 明确写着「日志会在 `root` 下不断累积，直到被外部删除；该接缝没有删除 API」，`@deepseek-ai/dsh-client-ui-workspace` 也把「No Session deletion（不支持删除会话）」列为已知限制。归档只是打了一个标记，日志文件永远留在磁盘上。这个插件补上的正是这一个缺失的操作。
+### 为什么需要它
 
-### 功能
+DSH 本身不提供会话删除：归档只写一个标记，日志文件会一直留在磁盘上。本插件补上这个缺失的操作，并且只在**归档集合内**的对话上执行。
 
-- **永久删除…** —— 已归档会话「…」菜单末尾的一行红色操作，带二次确认对话框。
-- **清理已归档对话** —— 侧边栏一级面板（与「插件」「自动化任务」同级），列出每个已归档对话的标题、占用大小与最近活动时间。
-- **批量删除** —— 勾选任意条目，或一次全选删除。
-- **无效条目清理** —— 曾被手动删掉日志文件的对话，归档标记与工作区成员记录仍会残留；它们会被标记为「日志已丢失」，可一键清干净。
-- 中英双语界面、跟随主题 token 的样式、可用键盘操作的对话框。
+### 删除是怎么做的
 
-### 一次删除会移除什么
+1. 先取得该会话的**存储写入锁**（`sessionPersistence.open(id, 'write')`）。这把锁是跨进程的：拿到它就说明没有别的 DSH 进程、也没有正在运行的 Agent 持有该会话。
+2. 持锁删除该会话目录下的日志文件（所有格式代）。
+3. 释放锁并确认 `stat(id)` 已查不到该会话；**确认失败就不动登记记录**，避免“列表里没了、磁盘还在”。
+4. 再清理：归档标记、各工作区成员记录、投影缓存记录。
+5. 通知已连接的客户端移除该行。
 
-| 内容 | 位置 |
-| --- | --- |
-| 会话日志（全部格式代） | `<DSH_HOME>/sessions/<项目>/<sessionId>/` |
-| 投影缓存检查点 | `<DSH_HOME>/storages/session_projcache/sessions/<sessionId>.json` |
-| 归档标记 | 注册表中持久化的归档集合 |
-| 工作区成员记录 | 各 Workspace 的 `sessionIds` |
+日志先删、登记后删，是为了让中断的操作退化成“无效条目”，下次再清理一次即可完成，不会出现数据假删除。
 
-已连接的客户端会通过标准的 `api-session/removed` 通知立即移除该行，无需刷新页面。
+### 面板与入口
 
-**安全性。** 只接受两类条目：存在于持久化归档集合中的 id，或「磁盘上已无日志且不是活会话」的 id（纯注册表残留）。普通、未归档、日志仍在的对话一律拒绝。两个 HTTP 路由只接受同源、JSON 体的 `POST`。
+- 侧边栏 **清理已归档对话**：列出已归档对话与已无日志的残留条目，支持勾选、全选、批量删除。
+- 会话「…」菜单 **永久删除…**：单条删除。
+- 展开条目可查看会话 ID、日志目录、日志文件及大小、缓存状态、日志格式，并复制 ID 或路径。
 
-### 安装
+### 会删除什么，不会删除什么
 
-插件页安装：侧边栏 **插件** → **添加插件** → 输入 `dsh-purge-archived` → **安装**。
+会删除：该会话的本地日志文件、会话目录、投影缓存记录、归档标记、工作区成员记录。
 
-`dsh` 命令行安装：
+不会删除：工作目录里的文档或代码成果、被多个会话共享的附件、子会话中的历史副本、备份与外部导出。这些数据不属于单个对话独占，需要单独处理。
+
+### 无法删除的情况
+
+插件会明确报告，不会假装成功：
+
+- 会话正在打开或仍有运行中的写入者 → 先关闭该对话或等本轮结束，再重试。
+- 日志文件删不掉（被其他程序占用等）→ 登记记录保持不变，可重试；详情里有具体路径。
+- 已不在归档集合中 → 拒绝删除，避免误删普通对话。
+
+### 安装与更新
+
+在 DSH 的 **插件 → 添加插件** 中输入 `dsh-purge-archived`。也可以通过 CLI：
 
 ```sh
 dsh plugin --profile desktop add dsh-purge-archived
 ```
 
-从本地目录安装，直接把插件管理器指向该目录即可：
+从源码目录安装时指向该目录即可（链接安装请保留目录）。升级后重启 DSH 并刷新页面。
+
+### 兼容性与隐私
+
+开发与验证环境为 DSH `0.2.1-rc.5`、Windows 桌面端；其他版本与平台未全面验证。依赖标准 Web/Desktop 组合中的会话持久化、工作区注册表、存储域与连接认证服务。
+
+扫描与删除入口仅向通过 DSH 认证的 owner 开放，同源校验；插件不上传对话内容，也不访问外部网络。
+
+问题反馈：[GitHub Issues](https://github.com/trimine/dsh-purge-archived/issues)。
+
+## English
+
+**Clean up archived chats** deletes archived DeepSeek Harness conversations from local storage, from inside the plugin — no manual digging through the disk.
+
+### Why
+
+DSH ships no conversation deletion: archiving only writes a mark, and the log stays on disk forever. This plugin adds that missing operation, restricted to conversations in the **archive set**.
+
+### How deletion works
+
+1. Take the conversation's **storage writer lock** (`sessionPersistence.open(id, 'write')`). The lock is cross-process: holding it proves no other DSH process and no running Agent owns the conversation.
+2. While holding it, delete the log files (all format generations) in the conversation directory.
+3. Release the lock and confirm `stat(id)` no longer resolves. **If that check fails, registry state is left untouched**, so a conversation never disappears from the list while its data survives.
+4. Then clear the archive mark, every workspace membership, and the projection-cache record.
+5. Notify connected clients so the row disappears immediately.
+
+Logs are removed before registry state on purpose: an interrupted run degrades into a "dangling" entry that a later cleanup finishes, never into a fake deletion.
+
+### Surfaces
+
+- Sidebar **Clean up archived chats**: archived conversations plus entries whose log is already gone; select, select all, delete in bulk.
+- Session `...` menu **Delete permanently…**: single deletion.
+- Expand a row for the session ID, log directory, log files and sizes, cache state and log format, with copy buttons.
+
+### What is and is not deleted
+
+Deleted: the conversation's local log files, its session directory, projection-cache record, archive mark and workspace memberships.
+
+Not deleted: documents or code in your working directory, attachments shared by several conversations, history copied into child sessions, backups and external exports. Those are not owned by a single conversation and need separate handling.
+
+### When deletion is refused
+
+The plugin reports the reason instead of pretending success:
+
+- The conversation is open or still has a running writer → close it or wait for the turn to finish, then retry.
+- The log file cannot be removed (held by another program, for example) → registry state stays unchanged and the operation can be retried; the exact path is in Details.
+- The conversation is no longer in the archive set → refused, so ordinary conversations are never touched.
+
+### Install and update
+
+In DSH, open **Plugins → Add plugin** and enter `dsh-purge-archived`. Or:
 
 ```sh
-dsh plugin --profile desktop add /absolute/path/to/dsh-purge-archived
+dsh plugin --profile desktop add dsh-purge-archived
 ```
 
-本地目录安装是 link 方式，源目录不能删除或移动。
+For a source checkout, point the plugin manager at that directory and keep it in place when linked. Restart DSH and refresh the page after updating.
 
-已安装插件升级到新版本后，需要重启一次 DeepSeek Harness 让 Host 半加载新模块，然后刷新页面。
+### Compatibility and privacy
 
-### 使用
+Developed and verified against DSH `0.2.1-rc.5` on Windows desktop; other versions and platforms are not comprehensively verified. Requires the standard Web/Desktop session persistence, workspace registry, storage domain and authenticated connection services.
 
-1. **单个对话** —— 先把侧边栏「视图选项」切到 **全部对话** 或 **仅归档** 让归档行可见，再打开该行「…」菜单选择 **永久删除…**。
-2. **批量** —— 点击侧边栏面板列表里的 **清理已归档对话**，勾选条目（或 **全选**），再点 **删除所选**。
-3. **无效条目** —— 同一页面中标记为「日志已丢失」的条目，用 **清理全部 N 个无效条目** 一次清掉。
+Scan and delete entry points are restricted to an authenticated DSH owner and checked for same-origin requests. The plugin uploads no conversation content and makes no outbound network calls.
 
-### 兼容性
-
-在 DeepSeek Harness `0.2.1-rc.5`（V4 会话日志格式，Windows 桌面端）上验证通过。删除逻辑与日志格式无关：它整目录删除，而不是写死某个日志文件名，因此后续日志格式代仍可正常工作。
-
-依赖 `@deepseek-ai/dsh-client-ui-workspace` 客户端包（标准 Web/桌面组合自带）以及 Host 侧的 Workspace 注册表。
-
-### 开发
-
-纯 JavaScript，无需构建。`index.js` 是 Host 半（Cordis 插件），`client.js` 是浏览器模块（`window.__ModuleLoader__`），`cordis.patch.yml` 插入插件行，`locale/*.json` 提供插件管理器的显示元数据。
-
-`index.js` 导出了文件系统层 `removeSessionArtifacts()`，可以针对临时 DSH 目录单独测试，无需运行 Host。
-
-### 发布清单
-
-清单文件里的 `author`、`repository`、`homepage`、`bugs` 以及 `LICENSE` 仍带 `OWNER` 占位符，替换后：
-
-```sh
-# 1. 想用自己的 scope 就改名（同时改 client.js 的 id: 与 cordis.patch.yml 的 name:）
-npm pkg set name=@you/dsh-purge-archived
-
-# 2. 发布
-npm publish --access public
-```
-
-发布后即可在「添加插件」中按包名安装。要在插件市场展示，需要向部署所指向的社区插件索引（`plugin-market` 行的 `indexes` 配置）提交条目。
+Report issues at [GitHub Issues](https://github.com/trimine/dsh-purge-archived/issues).
 
 ## License
 
-MIT
+MIT © 2026 trimine

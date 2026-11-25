@@ -26,7 +26,7 @@ window.__ModuleLoader__.load({
         panelLabel: 'Clean up archived chats',
         pageTitle: 'Clean up archived conversations',
         pageIntro:
-          'Archived conversations stay on disk until removed here. Deleting one removes its stored log, its projection cache, its archive mark, and its workspace membership.',
+          'Archived conversations keep their stored log on disk until removed here. Deleting one takes the storage writer lock, removes the log files, then clears the archive mark, workspace membership and projection cache. This is local cleanup, not a cloud operation.',
         summary: '{archived} archived · {dangling} without a stored log · {size} on disk',
         refresh: 'Refresh',
         selectAll: 'Select all',
@@ -54,11 +54,15 @@ window.__ModuleLoader__.load({
         confirm: 'Delete permanently',
         confirmMany: 'Delete {count}',
         working: 'Deleting…',
+        errUnsafeDelete: 'Deletion is unavailable in this DSH build, so nothing was deleted.',
         errNotArchived: 'This conversation is no longer archived, so nothing was deleted.',
         errInvalidId: 'A conversation id was rejected, so nothing was deleted.',
-        errLive: 'That conversation is live in this process, so nothing was deleted.',
-        errBusy: 'The log file is still held open by this process. Restart DSH and try again.',
-        errNetwork: 'The Host did not answer the request.',
+        errLive: 'That conversation is open right now, so nothing was deleted. Close it, then retry.',
+        errInUse: 'The conversation is held by a running writer, so nothing was deleted. Wait for the running turn to finish or close the conversation, then retry.',
+        errStillPresent: 'The stored log survived deletion, so the archive mark and workspace membership were left unchanged. Retry, or close DSH and remove the log file shown in Details.',
+        errIncomplete: 'The log was removed, but some cleanup steps failed: {detail}',
+        errNetwork: 'The Host did not answer. The result is unknown; refresh before retrying.',
+        batchLimit: 'Up to 500 inactive entries per batch. Repeat cleanup for remaining entries.',
         errGeneric: 'The deletion failed: {detail}',
         errMore: '{detail} (+{count} more)',
         errScan: 'Reading archived conversations failed: {detail}',
@@ -87,7 +91,7 @@ window.__ModuleLoader__.load({
         panelLabel: '清理已归档对话',
         pageTitle: '清理已归档对话',
         pageIntro:
-          '归档只做标记，日志仍留在磁盘上。在这里删除会同时移除会话日志、投影缓存、归档标记与工作区成员记录。',
+          '归档只做标记，日志仍留在磁盘上。在这里删除会先取得存储写入锁，删除日志文件，再清除归档标记、工作区成员记录与投影缓存。这是本地清理，不涉及云端。',
         summary: '已归档 {archived} 个 · 无日志的无效条目 {dangling} 个 · 占用 {size}',
         refresh: '刷新',
         selectAll: '全选',
@@ -115,11 +119,15 @@ window.__ModuleLoader__.load({
         confirm: '永久删除',
         confirmMany: '删除 {count} 个',
         working: '正在删除…',
+        errUnsafeDelete: '当前 DSH 版本不支持删除，未删除任何数据。',
         errNotArchived: '该对话已不在归档中，未删除任何内容。',
         errInvalidId: '对话 id 未通过校验，未删除任何内容。',
-        errLive: '该对话仍在本进程中运行，未删除任何内容。',
-        errBusy: '日志文件仍被本进程占用。请重启 DSH 后再试。',
-        errNetwork: 'Host 未响应请求。',
+        errLive: '该对话正在打开中，未删除任何内容。请先关闭该对话再重试。',
+        errInUse: '该对话正被运行中的写入者占用，未删除任何内容。请等待本轮运行结束或关闭该对话后再重试。',
+        errStillPresent: '日志文件未能删除，因此归档标记与工作区成员记录保持不变。可重试；若仍失败，请按详情中的路径手动确认。',
+        errIncomplete: '日志已删除，但部分清理步骤失败：{detail}',
+        errNetwork: 'Host 未响应，结果未知。请刷新确认后再重试。',
+        batchLimit: '每批最多处理 500 个未运行条目，剩余条目需再次清理。',
         errGeneric: '操作失败：{detail}',
         errMore: '{detail}（另有 {count} 个失败）',
         errScan: '读取已归档对话失败：{detail}',
@@ -249,13 +257,15 @@ window.__ModuleLoader__.load({
 .dsh-pa-copy:hover { background: var(--dsw-alias-bg-layer-2); }
 `
 
-    const prefersChinese = (() => {
-      try {
-        return String(navigator.language || '').toLowerCase().startsWith('zh')
-      } catch {
-        return false
-      }
-    })()
+    const MAX_BATCH = 500
+    const REQUEST_TIMEOUT_MS = 60000
+    let localeService
+    const localeId = () => localeService?.getLocale().active ?? 'en'
+    const localeSubscribe = (listener) => localeService.subscribe(listener)
+    const localeSnapshot = () => localeService.getLocale()
+    function useLocale() {
+      React.useSyncExternalStore(localeSubscribe, localeSnapshot, localeSnapshot)
+    }
 
     function interpolate(text, vars) {
       if (vars === undefined) return text
@@ -274,13 +284,13 @@ window.__ModuleLoader__.load({
           // Fall through to the local dictionary.
         }
       }
-      const dict = prefersChinese ? DICT.zh : DICT.en
+      const dict = localeId().toLowerCase().startsWith('zh') ? DICT.zh : DICT.en
       return interpolate(dict[key] ?? key, vars)
     }
 
     /** Copy without a translator (panel label thunks and page chrome). */
     function copy(key, vars) {
-      return interpolate((prefersChinese ? DICT.zh : DICT.en)[key] ?? key, vars)
+      return translate(localeService?.bind(NS), key, vars)
     }
 
     function formatBytes(bytes) {
@@ -298,7 +308,7 @@ window.__ModuleLoader__.load({
     function formatTime(ms) {
       if (typeof ms !== 'number' || ms <= 0) return '—'
       try {
-        return new Date(ms).toLocaleString()
+        return new Date(ms).toLocaleString(localeId())
       } catch {
         return '—'
       }
@@ -306,7 +316,7 @@ window.__ModuleLoader__.load({
 
     // One pending request plus a data revision shared by the menu row, the
     // dialog, and the cleanup page.
-    const store = { pending: null, version: 0 }
+    const store = { pending: null, version: 0, busy: false, deletionAvailable: undefined }
     const listeners = new Set()
     function emit() {
       for (const listener of [...listeners]) listener()
@@ -318,6 +328,8 @@ window.__ModuleLoader__.load({
       }
     }
     function setPending(next) {
+      if (store.busy || (next && store.pending)) return
+      if (next) next.returnFocus = document.activeElement
       store.pending = next
       emit()
     }
@@ -343,40 +355,84 @@ window.__ModuleLoader__.load({
     /** Map one Host result code onto localized copy. */
     function describeFailure(result, t) {
       const code = result?.code
+      if (code === 'UNSUPPORTED_SAFE_DELETE') return translate(t, 'errUnsafeDelete')
       if (code === 'NOT_ARCHIVED') return translate(t, 'errNotArchived')
       if (code === 'INVALID_SESSION_ID') return translate(t, 'errInvalidId')
-      if (code === 'SESSION_LIVE') return translate(t, 'errLive')
+      if (code === 'SESSION_LIVE' || code === 'SESSION_IN_USE' || code === 'LOCK_UNAVAILABLE') {
+        return translate(t, code === 'SESSION_LIVE' ? 'errLive' : 'errInUse')
+      }
+      if (code === 'LOG_STILL_PRESENT' || code === 'VERIFY_FAILED') return translate(t, 'errStillPresent')
+      if (code === 'CLEANUP_INCOMPLETE') {
+        const detail = Array.isArray(result?.warnings) ? result.warnings.join('; ') : String(result?.message ?? '')
+        return translate(t, 'errIncomplete', { detail: detail || code })
+      }
       if (code === 'LOG_DELETE_FAILED') {
         const detail = String(result?.message ?? '')
         if (/EBUSY|EPERM|EACCES|resource busy|being used by another process/i.test(detail)) {
-          return translate(t, 'errBusy')
+          return translate(t, 'errInUse')
         }
         return translate(t, 'errGeneric', { detail: detail || code })
       }
       return translate(t, 'errGeneric', { detail: code ?? 'unknown' })
     }
 
-    async function postJson(url, body) {
+    const activeRequests = new Set()
+    async function postJson(url, body, signal) {
+      const controller = new AbortController()
+      activeRequests.add(controller)
+      let timedOut = false
+      const abort = () => controller.abort()
+      signal?.addEventListener('abort', abort, { once: true })
+      if (signal?.aborted) abort()
+      const timer = setTimeout(() => {
+        timedOut = true
+        controller.abort()
+      }, REQUEST_TIMEOUT_MS)
       try {
         const response = await fetch(url, {
           method: 'POST',
+          credentials: 'same-origin',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify(body ?? {}),
+          signal: controller.signal,
         })
-        const payload = await response.json().catch(() => null)
-        if (payload !== null) return payload
-        return { ok: false, code: `HTTP_${response.status}` }
+        const payload = await response.json()
+        if (!response.ok) return {
+          ok: false,
+          code: typeof payload?.code === 'string' ? payload.code : `HTTP_${response.status}`,
+        }
+        if (!payload || typeof payload !== 'object' || typeof payload.ok !== 'boolean') {
+          return { ok: false, code: 'INVALID_RESPONSE' }
+        }
+        return payload
       } catch {
-        return { ok: false, code: 'NETWORK' }
+        return { ok: false, code: timedOut ? 'TIMEOUT' : controller.signal.aborted ? 'ABORTED' : 'NETWORK' }
+      } finally {
+        clearTimeout(timer)
+        signal?.removeEventListener('abort', abort)
+        activeRequests.delete(controller)
       }
     }
 
-    function requestPurge(sessionIds) {
-      return postJson(ROUTE_DELETE, { sessionIds })
+    function requestPurge(sessionIds, signal) {
+      if (!sessionIds.length || sessionIds.length > MAX_BATCH) {
+        return Promise.resolve({ ok: false, code: 'INVALID_BATCH' })
+      }
+      return postJson(ROUTE_DELETE, { sessionIds }, signal)
     }
 
-    function requestScan() {
-      return postJson(ROUTE_SCAN, {})
+    async function requestScan(signal) {
+      const outcome = await postJson(ROUTE_SCAN, {}, signal)
+      if (outcome.ok === true && typeof outcome.deletionAvailable === 'boolean') {
+        store.deletionAvailable = outcome.deletionAvailable
+        emit()
+      }
+      return outcome
+    }
+
+    function retryIds(ids, outcome) {
+      if (!Array.isArray(outcome.results)) return ids
+      return ids.filter((id) => !outcome.results.some((result) => result?.sessionId === id && result.ok === true))
     }
 
     /** Clipboard write with a silent failure: the paths stay selectable anyway. */
@@ -391,6 +447,15 @@ window.__ModuleLoader__.load({
 
     function CopyButton(props) {
       const [done, setDone] = React.useState(false)
+      const timerRef = React.useRef(null)
+      const mountedRef = React.useRef(true)
+      React.useEffect(() => {
+        mountedRef.current = true
+        return () => {
+          mountedRef.current = false
+          clearTimeout(timerRef.current)
+        }
+      }, [])
       return h(
         'button',
         {
@@ -398,9 +463,10 @@ window.__ModuleLoader__.load({
           className: 'dsh-pa-copy',
           onClick: async () => {
             const copied = await copyText(String(props.value))
-            if (!copied) return
+            if (!copied || !mountedRef.current) return
             setDone(true)
-            setTimeout(() => setDone(false), 1200)
+            clearTimeout(timerRef.current)
+            timerRef.current = setTimeout(() => setDone(false), 1200)
           },
         },
         done ? copy('copied') : copy('copy'),
@@ -451,39 +517,83 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = React.useState(false)
       const [error, setError] = React.useState(null)
       const cancelRef = React.useRef(null)
+      const dialogRef = React.useRef(null)
+      const controllerRef = React.useRef(null)
+      const [remaining, setRemaining] = React.useState(null)
+      useLocale()
 
       React.useEffect(() => {
         if (request === null) return undefined
         setError(null)
+        setRemaining(null)
         setBusy(false)
         const focusTimer = setTimeout(() => cancelRef.current?.focus(), 0)
         const onKeyDown = (event) => {
-          if (event.key !== 'Escape') return
-          event.stopPropagation()
-          setPending(null)
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            event.stopPropagation()
+            if (!store.busy) setPending(null)
+          } else if (event.key === 'Tab') {
+            const dialog = dialogRef.current
+            if (!dialog) return
+            const buttons = [...dialog.querySelectorAll('button:not(:disabled), [tabindex="0"]')]
+            const first = buttons[0] ?? dialog
+            const last = buttons[buttons.length - 1] ?? dialog
+            if (!dialog.contains(document.activeElement) || !buttons.length ||
+                (event.shiftKey ? document.activeElement === first : document.activeElement === last)) {
+              event.preventDefault()
+              ;(event.shiftKey ? last : first).focus()
+            }
+          }
+        }
+        const onFocus = (event) => {
+          if (dialogRef.current && !dialogRef.current.contains(event.target)) {
+            ;(store.busy ? dialogRef.current : cancelRef.current)?.focus()
+          }
         }
         window.addEventListener('keydown', onKeyDown, true)
+        window.addEventListener('focusin', onFocus, true)
         return () => {
           clearTimeout(focusTimer)
+          controllerRef.current?.abort()
+          store.busy = false
           window.removeEventListener('keydown', onKeyDown, true)
+          window.removeEventListener('focusin', onFocus, true)
+          if (request.returnFocus?.isConnected) request.returnFocus.focus()
         }
       }, [request])
 
       if (request === null) return null
 
-      const count = request.ids.length
+      const ids = remaining ?? request.ids
+      const count = ids.length
       const many = count > 1
       const close = () => {
-        if (busy) return
+        if (store.busy) return
         setPending(null)
       }
 
       const confirm = async () => {
-        if (busy) return
+        if (store.busy) return
+        store.busy = true
         setBusy(true)
         setError(null)
-        const outcome = await requestPurge(request.ids)
-        if (outcome.ok === true) {
+        const controller = new AbortController()
+        controllerRef.current = controller
+        // A menu can open before the management page has scanned capabilities.
+        const capability = store.deletionAvailable === undefined
+          ? await requestScan(controller.signal)
+          : null
+        const outcome = store.deletionAvailable === false
+          ? { ok: false, code: 'UNSUPPORTED_SAFE_DELETE' }
+          : capability && capability.ok !== true
+            ? capability
+            : await requestPurge(ids, controller.signal)
+        if (controller.signal.aborted || store.pending !== request) return
+        store.busy = false
+        const retry = retryIds(ids, outcome)
+        setRemaining(retry)
+        if (retry.length === 0) {
           setBusy(false)
           setPending(null)
           bumpVersion()
@@ -492,14 +602,14 @@ window.__ModuleLoader__.load({
         setBusy(false)
         bumpVersion()
         const failed = Array.isArray(outcome.results)
-          ? outcome.results.filter((result) => result.ok !== true)
+          ? outcome.results.filter((result) => result && ids.includes(result.sessionId) && result.ok !== true)
           : []
         if (failed.length > 0) {
           const first = describeFailure(failed[0], t)
           setError(
             failed.length > 1 ? translate(t, 'errMore', { detail: first, count: failed.length - 1 }) : first,
           )
-        } else if (outcome.code === 'NETWORK') {
+        } else if (['NETWORK', 'TIMEOUT', 'ABORTED'].includes(outcome.code)) {
           setError(translate(t, 'errNetwork'))
         } else {
           setError(describeFailure(outcome, t))
@@ -562,13 +672,16 @@ window.__ModuleLoader__.load({
             {
               className: 'dsh-pa-dialog',
               role: 'dialog',
+              ref: dialogRef,
+              tabIndex: -1,
+              'aria-busy': busy,
               'aria-modal': 'true',
               'aria-labelledby': 'dsh-pa-dialog-title',
             },
             h('h2', { className: 'dsh-pa-title', id: 'dsh-pa-dialog-title' }, title),
             h('p', { className: 'dsh-pa-body' }, body),
             h('p', { className: 'dsh-pa-hint' }, translate(t, 'hint')),
-            error === null ? null : h('p', { className: 'dsh-pa-error' }, error),
+            error === null ? null : h('p', { className: 'dsh-pa-error', role: 'alert' }, error),
             h(
               'div',
               { className: 'dsh-pa-actions' },
@@ -631,6 +744,8 @@ window.__ModuleLoader__.load({
 
     /** Bulk cleanup page: one row per archived or dangling conversation. */
     function PurgePage() {
+      useLocale()
+      const pending = usePending()
       const version = useVersion()
       const [data, setData] = React.useState(null)
       const [loading, setLoading] = React.useState(true)
@@ -641,39 +756,51 @@ window.__ModuleLoader__.load({
 
       React.useEffect(() => {
         let cancelled = false
+        const controller = new AbortController()
         setLoading(true)
         setError(null)
-        requestScan().then((payload) => {
+        requestScan(controller.signal).then((payload) => {
           if (cancelled) return
           setLoading(false)
           if (payload.ok !== true) {
             setError(translate(undefined, 'errScan', { detail: payload.code ?? 'unknown' }))
             return
           }
-          const entries = Array.isArray(payload.entries) ? payload.entries : []
+          if (!Array.isArray(payload.entries)) {
+            setError(copy('errScan', { detail: 'INVALID_RESPONSE' }))
+            return
+          }
+          const entries = payload.entries.filter((entry) => entry && typeof entry.sessionId === 'string')
           setData({ ...payload, entries })
-          const live = new Set(entries.map((entry) => entry.sessionId))
+          const live = new Set(entries.filter((entry) => entry.live !== true).map((entry) => entry.sessionId))
           setSelected((previous) => new Set([...previous].filter((id) => live.has(id))))
         })
         return () => {
           cancelled = true
+          controller.abort()
         }
       }, [version, reloadToken])
 
       const entries = data?.entries ?? []
-      const dangling = entries.filter((entry) => entry.logFound !== true)
-      const allSelected = entries.length > 0 && selected.size === entries.length
+      const eligible = entries.filter((entry) => entry.live !== true)
+      const dangling = eligible.filter((entry) => entry.logFound !== true).slice(0, MAX_BATCH)
+      const selectable = eligible.slice(0, MAX_BATCH)
+      const allSelected = selectable.length > 0 && selectable.every((entry) => selected.has(entry.sessionId))
+      const locked = loading || error !== null || pending !== null || data?.deletionAvailable === false
 
       const toggle = (sessionId) => {
+        if (locked || !eligible.some((entry) => entry.sessionId === sessionId)) return
         setSelected((previous) => {
           const next = new Set(previous)
           if (next.has(sessionId)) next.delete(sessionId)
-          else next.add(sessionId)
+          else if (next.size < MAX_BATCH) next.add(sessionId)
           return next
         })
       }
 
       const openDialog = (ids, extra) => {
+        if (locked) return
+        ids = [...new Set(ids)].filter((id) => eligible.some((entry) => entry.sessionId === id)).slice(0, MAX_BATCH)
         if (ids.length === 0) return
         const allDangling = ids.every((id) => dangling.some((entry) => entry.sessionId === id))
         setPending({
@@ -720,9 +847,9 @@ window.__ModuleLoader__.load({
               color: 'var(--dsw-alias-label-primary)',
               opacity: entries.length === 0 ? 0.5 : 1,
             },
-            disabled: entries.length === 0,
+            disabled: locked || eligible.length === 0,
             onClick: () =>
-              setSelected(allSelected ? new Set() : new Set(entries.map((entry) => entry.sessionId))),
+              setSelected(allSelected ? new Set() : new Set(selectable.map((entry) => entry.sessionId))),
           },
           copy(allSelected ? 'clearSelection' : 'selectAll'),
         ),
@@ -751,7 +878,7 @@ window.__ModuleLoader__.load({
               color: 'var(--dsw-alias-state-error-primary)',
               opacity: selected.size === 0 ? 0.5 : 1,
             },
-            disabled: selected.size === 0,
+            disabled: locked || selected.size === 0,
             onClick: () => openDialog([...selected]),
           },
           copy('deleteSelected', { count: selected.size }),
@@ -772,7 +899,7 @@ window.__ModuleLoader__.load({
               fontWeight: 600,
               opacity: dangling.length === 0 ? 0.5 : 1,
             },
-            disabled: dangling.length === 0,
+            disabled: locked || dangling.length === 0,
             onClick: () =>
               openDialog(
                 dangling.map((entry) => entry.sessionId),
@@ -792,11 +919,11 @@ window.__ModuleLoader__.load({
         })
       }
 
-      const pathValue = (value, key) =>
+      const pathValue = (value, key, label = value) =>
         h(
           'span',
           { className: 'dsh-pa-file', key },
-          h('code', { className: 'dsh-pa-code', style: { flex: '1 1 auto' } }, value),
+          h('code', { className: 'dsh-pa-code', style: { flex: '1 1 auto' } }, label),
           h(CopyButton, { value }),
         )
 
@@ -827,7 +954,7 @@ window.__ModuleLoader__.load({
           value:
             Array.isArray(entry.files) && entry.files.length > 0
               ? entry.files.map((file, index) =>
-                  pathValue(`${file.path} · ${formatBytes(file.bytes)}`, `file${index}`),
+                  pathValue(file.path, `file${index}`, `${file.path} · ${formatBytes(file.bytes)}`),
                 )
               : copy('none'),
         })
@@ -884,7 +1011,8 @@ window.__ModuleLoader__.load({
                 h('input', {
                   type: 'checkbox',
                   className: 'dsh-pa-check',
-                  checked: selected.has(entry.sessionId),
+                  checked: entry.live !== true && selected.has(entry.sessionId),
+                  disabled: locked || entry.live === true || (!selected.has(entry.sessionId) && selected.size >= MAX_BATCH),
                   onChange: () => toggle(entry.sessionId),
                   'aria-label': entry.title || entry.sessionId,
                 }),
@@ -912,9 +1040,13 @@ window.__ModuleLoader__.load({
                 h(
                   'span',
                   { className: 'dsh-pa-row-meta' },
-                  entry.logFound === true
-                    ? formatTime(entry.updatedAt)
-                    : h('span', { className: 'dsh-pa-badge dsh-pa-badge-info' }, copy('badgeUnarchived')),
+                  entry.live === true
+                    ? h('span', { className: 'dsh-pa-badge dsh-pa-badge-info' }, copy('live'))
+                    : entry.logFound === true
+                      ? formatTime(entry.updatedAt)
+                      : entry.archived !== true
+                        ? h('span', { className: 'dsh-pa-badge dsh-pa-badge-info' }, copy('badgeUnarchived'))
+                        : '—',
                 ),
                 h(
                   'button',
@@ -962,7 +1094,11 @@ window.__ModuleLoader__.load({
             { className: 'dsh-pa-page-inner' },
             h('h1', { className: 'dsh-pa-page-title' }, copy('pageTitle')),
             h('p', { className: 'dsh-pa-page-intro' }, copy('pageIntro')),
-            error === null ? null : h('p', { className: 'dsh-pa-error' }, error),
+            h('p', { className: 'dsh-pa-page-intro' }, copy('batchLimit')),
+            data?.deletionAvailable === false
+              ? h('p', { className: 'dsh-pa-error', role: 'status' }, copy('errUnsafeDelete'))
+              : null,
+            error === null ? null : h('p', { className: 'dsh-pa-error', role: 'alert' }, error),
             toolbar,
             body,
           ),
@@ -973,16 +1109,12 @@ window.__ModuleLoader__.load({
     return {
       inject: ['slots', 'locale'],
       apply(ctx) {
-        const localeId = () => {
-          try {
-            const snapshot = ctx.locale.getLocale()
-            const id = snapshot?.id ?? snapshot?.locale ?? snapshot?.current
-            if (typeof id === 'string' && id.length > 0) return id.toLowerCase()
-          } catch {
-            // Fall back to the browser's own preference.
-          }
-          return prefersChinese ? 'zh' : 'en'
-        }
+        localeService = ctx.locale
+        ctx.effect(() => () => {
+          for (const controller of activeRequests) controller.abort()
+          store.pending = null
+          store.busy = false
+        }, 'purge-archived: request cleanup')
 
         ctx.effect(
           () => ctx.locale.register(NS, { en: DICT.en, zh: DICT.zh }),

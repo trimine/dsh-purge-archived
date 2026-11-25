@@ -1,7 +1,7 @@
 {
   "name": "dsh-purge-archived",
-  "version": "1.0.1",
-  "description": "Permanently delete archived DeepSeek Harness conversations: removes the stored session log, its projection cache, the archive mark, and the workspace membership, with a bulk cleanup page for dangling entries.",
+  "version": "1.1.0",
+  "description": "Delete archived DeepSeek Harness conversations from local storage: takes the writer lock, removes log files, then clears the archive mark, workspace membership and projection cache.",
   "icon": "icon.svg",
   "author": "trimine",
   "repository": {
@@ -13,6 +13,9 @@
     "url": "https://github.com/trimine/dsh-purge-archived/issues"
   },
   "type": "module",
+  "scripts": {
+    "test": "node --test --test-isolation=none tests/*.test.mjs"
+  },
   "engines": {
     "node": "^22.19.0 || >=24.0.0",
     "dsh": ">=0.2.0-rc.2 || >=0.2.1-rc.2"
@@ -26,6 +29,7 @@
   },
   "files": [
     "index.js",
+    "path-safety.js",
     "client.js",
     "cordis.patch.yml",
     "locale/*.json",
@@ -61,5 +65,8 @@
         "0.2.1-rc.5": "compatible"
       }
     }
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

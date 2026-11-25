@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Clean up archived chats",
-    "description": "Permanently delete archived conversations — the stored log, projection cache, archive mark, and workspace membership — and inspect each entry's session ID, local log files, working directory, and log format from a cleanup panel."
+    "description": "Permanently delete archived conversations from local storage: takes the storage writer lock, removes log files, then clears the archive mark, workspace membership and projection cache, with a cleanup panel showing session IDs, log files and cache state."
   }
 }
