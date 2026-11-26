@@ -1,16 +1,29 @@
 {
   "name": "dsh-purge-archived",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Delete archived DeepSeek Harness conversations from local storage: takes the writer lock, removes log files, then clears the archive mark, workspace membership and projection cache.",
   "icon": "icon.svg",
   "author": "trimine",
   "contributors": [
-    { "name": "trimine", "url": "https://github.com/trimine" },
-    { "name": "DeepSeek V4.1 Flash" },
-    { "name": "GPT-6 Astra" },
-    { "name": "Gemini 4 Carbon" },
-    { "name": "GPT-6.2 Astra" },
-    { "name": "Codex (GPT-5)" }
+    {
+      "name": "trimine",
+      "url": "https://github.com/trimine"
+    },
+    {
+      "name": "DeepSeek V4.1 Flash"
+    },
+    {
+      "name": "GPT-6 Astra"
+    },
+    {
+      "name": "Gemini 4 Carbon"
+    },
+    {
+      "name": "GPT-6.2 Astra"
+    },
+    {
+      "name": "Codex (GPT-5)"
+    }
   ],
   "repository": {
     "type": "git",
