@@ -118,13 +118,13 @@ Report issues at [GitHub Issues](https://github.com/trimine/dsh-purge-archived/i
 
 开发者与维护者 / Developer and maintainer: [trimine](https://github.com/trimine).
 
-共创模型 / AI collaborators (development-session model identifiers):
+共创模型 / AI collaborators:
 
-- DeepSeek V4.1 Flash: `sanshui/Deepseek-v4.1-flash-free`, `sanshui/Deepseek-v4.1-flash-02`
-- GPT-6 Astra: `chatflowsai/gpt-6-astra`
-- Gemini 4 Carbon: `cpa/gemini-4-carbon`
-- GPT-6.2 Astra: `magpie-responses/chatflowsai/gpt-6.2-astra`
-- Codex (GPT-5): 发布准备 / release preparation
+- DeepSeek V4.1 Flash
+- GPT-6 Astra
+- Gemini 4 Carbon
+- GPT-6.2 Astra
+- Codex (GPT-5)
 
 ## License
 
