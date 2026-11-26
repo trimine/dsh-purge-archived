@@ -2,11 +2,6 @@
 
 ## 1.1.1
 
-- 中文：README 和 npm 包中的 AI 贡献者仅按模型名称署名，不再列出模型来源或路由标识。开发者与维护者仍为 trimine。本次不改变插件功能。
-- English: The README and npm package credit AI contributors by model name only, without provider or routing identifiers. trimine remains the developer and maintainer. Plugin behavior is unchanged.
-
-## 1.1.0 — 2026-11-16
-
 ### 中文
 
 **恢复插件内删除，并改为持锁删除。** 不再需要在 DSH 之外手动清理磁盘文件。
